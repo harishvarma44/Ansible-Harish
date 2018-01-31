@@ -1,0 +1,103 @@
+---
+
+   - hosts: percona
+     vars:
+        mysql_root_password: root
+        mysql_root_password1: ""
+        mysql_sstuser_password: s3cretPass
+        ansible_hostname1: percona1
+        ansible_hostname2: percona2 
+     become: yes
+     tasks:
+
+     - name: Import PerconaDB public GPG Key
+       apt_key:
+        keyserver: keys.gnupg.net
+        id: 8507EFA5
+     - name: Add Percona Sources list1
+       lineinfile: >
+        line="deb http://repo.percona.com/apt trusty main"
+        dest=/etc/apt/sources.list.d/percona.list
+        state=present
+        create=yes
+     - name: Add Percona Sources list2
+       lineinfile: >
+        line="deb-src http://repo.percona.com/apt trusty main"
+        dest=/etc/apt/sources.list.d/percona.list
+        state=present 
+        create=yes
+     - name: Changing MySql root password
+       debconf: 
+         name: percona-xtradb-cluster-server-5.5
+         question: percona-xtradb-cluster-server/{{ item }}
+         value: '{{ mysql_root_password }}'
+         vtype: 'password'
+       with_items:
+        - 'root_password'
+        - 'root_password_again'
+       tags: mysql-root-password
+     - name: Install percona-xtradb-cluster in percona nodes
+       apt: name={{ item }} state=present force=yes update_cache=yes
+       with_items:
+        - percona-xtradb-cluster-galera-2.x
+        - percona-xtradb-cluster-server-5.5
+        - python-mysqldb
+       tags: percona-install-packages
+     - name: Apt-Pinning the packages
+       copy: src=templates/00percona.pref dest=/etc/apt/preferences.d/00percona.pref
+       tags: percona-apt-pinning
+     - name: Stop MySql Service on percona(1,2) nodes
+       service: name=mysql state=stopped
+       tags: mysql-service-stop
+
+# Code for only bootstrapping node Percona1
+     - name: Configuring for Bootstrapping on Percona1
+       template: src=templates/my.cnf.j2 dest=/etc/mysql/my.cnf
+       when: '"{{ ansible_hostname }}" == "percona1"'
+       tags: mysql-bootstrap,setting-myconf
+
+     - name: Configuring mysql.conf on Percona2
+       template: src=templates/my.cnf_cl_nodes.j2 dest=/etc/mysql/my.cnf
+       when: '"{{ ansible_hostname }}" == "percona2"'
+       tags: mysql-bootstrap,setting-myconf
+
+     - name: Bootstrap Percona1
+       command: /etc/init.d/mysql bootstrap-pxc
+       when: '"{{ ansible_hostname }}" == "percona1"'
+       tags: mysql-bootstrap-node
+##Testing##
+#     - shell: echo harish
+#       tags: ss
+#       when: '"{{ ansible_hostname }}" == "percona1"'
+#       ignore_errors: true
+#       run_once: true
+#       delegate_to: percona1
+#Testing##
+
+     - name: Create and grant privileges for sstuser user on percona1
+       mysql_user: login_user=root login_password="{{ mysql_root_password }}" check_implicit_admin=yes name=sstuser password={{ mysql_sstuser_password }} host=localhost priv="*.*:RELOAD,LOCK TABLES,REPLICATION CLIENT" state=present
+       when: '"{{ ansible_hostname }}" == "percona1"'
+       tags: mysql-create-grantpriv-sstuser
+
+     - name: Starting mysql on Percona2
+       service: name=mysql state=started
+       when: '"{{ ansible_hostname }}" == "percona2"'
+       tags: mysql-node2-start
+
+     - name: Update MySQL root password for all root accounts
+       mysql_user: 'login_user=root login_password="{{ mysql_root_password1 }}" name=root password={{ mysql_root_password }} host=localhost state=present'
+       tags: update-root-password
+       ignore_errors: true
+       register: ss
+
+     - debug: msg="Password is already set earlier ,so failing to connect---NOT AN ISSUE-------"
+       when: 'ss|failed'
+       tags: updated-root-password-earlier
+
+     - name: Adding db user for percona-db-cluster
+       mysql_user: 'check_implicit_admin=yes login_user=root login_password="{{ mysql_root_password }}" name=harish password=harish host=localhost state=present'
+       tags: add-new-db-user
+
+     - name: Create a new database with name 'harish'
+       mysql_db: 'login_user=root login_password="{{ mysql_root_password }}" name=harish state=present'
+       tags: new-database-create
