@@ -1,0 +1,18 @@
+---
+- hosts: mongodb
+  tasks:
+  - name: Import MongoDB public GPG Key
+    apt_key:
+        keyserver: keyserver.ubuntu.com
+        id: 0C49F3730359A14518585931BC711F9BA15703C6
+  - name: create mongodb-org-3.2.list
+    file: path=/etc/apt/sources.list.d/mongodb.list state=touch owner=root group=root mode=0600
+  - name: Add mongo sources list
+    lineinfile: >
+      line="deb http://repo.mongodb.org/apt/ubuntu trusty/mongodb-org/3.2 multiverse"
+      dest=/etc/apt/sources.list.d/mongodb.list
+      state=present
+      create=yes
+  - name: Install Mongodb Server
+    sudo: yes
+    apt: name=mongodb state=latest update_cache=yes
